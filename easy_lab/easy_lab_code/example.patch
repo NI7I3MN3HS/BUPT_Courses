@@ -1,0 +1,1813 @@
+From fa5cf3194a8883d408885b7b5f7bc77f654f9c3a Mon Sep 17 00:00:00 2001
+From: alantu <alan020113@gmail.com>
+Date: Sat, 14 Oct 2023 17:03:49 +0000
+Subject: [PATCH] first commit
+
+---
+ .devcontainer/devcontainer.json |  30 +-
+ Makefile                        |  52 +--
+ README.md                       | 438 +++++++++----------
+ demo.c                          |  72 ++--
+ example.patch                   | 726 ++++++++++++++++++++++++++++++++
+ uthread.c                       | 309 +++++++++-----
+ uthread.h                       | 119 +++---
+ 7 files changed, 1296 insertions(+), 450 deletions(-)
+ create mode 100644 example.patch
+
+diff --git a/.devcontainer/devcontainer.json b/.devcontainer/devcontainer.json
+index 06e6dd6..4009e94 100644
+--- a/.devcontainer/devcontainer.json
++++ b/.devcontainer/devcontainer.json
+@@ -1,16 +1,16 @@
+-{
+-    "name": "C++ Development Container",
+-    "dockerFile": "Dockerfile",
+-  
+-    "customizations": {
+-      "vscode": {
+-        "extensions": [
+-          "llvm-vs-code-extensions.vscode-clangd",
+-          "ms-vscode.cpptools",
+-          "wayou.vscode-todo-highlight"
+-        ]
+-      }
+-    },
+-    "runArgs": ["--privileged"]
+-  }
++{
++    "name": "C++ Development Container",
++    "dockerFile": "Dockerfile",
++  
++    "customizations": {
++      "vscode": {
++        "extensions": [
++          "llvm-vs-code-extensions.vscode-clangd",
++          "ms-vscode.cpptools",
++          "wayou.vscode-todo-highlight"
++        ]
++      }
++    },
++    "runArgs": ["--privileged"]
++  }
+   
+\ No newline at end of file
+diff --git a/Makefile b/Makefile
+index 8a0156a..6a9483b 100644
+--- a/Makefile
++++ b/Makefile
+@@ -1,27 +1,27 @@
+-all: demo tests
+-.PHONY: clean dump tests
+-CFLAGS := -Wall -g -O0
+-CC := gcc
+-
+-uthread.o: uthread.c 
+-	$(CC) $(CFLAGS) -c $^ -o $@ 
+-switch.o: switch.S
+-	$(CC) $(CFLAGS) -c $^ -o $@
+-
+-simple : simple.c uthread.o switch.o
+-	$(CC) $(CFLAGS) -o $@ $^
+-
+-pingpong : pingpong.c uthread.o switch.o
+-	$(CC) $(CFLAGS) -o $@ $^
+-	
+-recursion : recursion.c uthread.o switch.o
+-	$(CC) $(CFLAGS) -o $@ $^
+-demo : demo.c switch.o
+-	$(CC) $(CFLAGS) -o $@ $^
+-tests: simple pingpong recursion
+-	./simple
+-	./pingpong
+-	./recursion
+-
+-clean:
++all: demo tests
++.PHONY: clean dump tests
++CFLAGS := -Wall -g -O0
++CC := gcc
++
++uthread.o: uthread.c 
++	$(CC) $(CFLAGS) -c $^ -o $@ 
++switch.o: switch.S
++	$(CC) $(CFLAGS) -c $^ -o $@
++
++simple : simple.c uthread.o switch.o
++	$(CC) $(CFLAGS) -o $@ $^
++
++pingpong : pingpong.c uthread.o switch.o
++	$(CC) $(CFLAGS) -o $@ $^
++	
++recursion : recursion.c uthread.o switch.o
++	$(CC) $(CFLAGS) -o $@ $^
++demo : demo.c switch.o
++	$(CC) $(CFLAGS) -o $@ $^
++tests: simple pingpong recursion
++	./simple
++	./pingpong
++	./recursion
++
++clean:
+ 	rm -f simple uthread.o switch.o test_simple.S pingpong recursion
+\ No newline at end of file
+diff --git a/README.md b/README.md
+index 511f26b..1a19fb0 100644
+--- a/README.md
++++ b/README.md
+@@ -1,220 +1,220 @@
+-# User Level Thread
+-## 截止: 2023.10.21 23:59
+-助教 qiuqichen@bupt.edu.cn
+-# 背景
+-为了方便讲解，以下都以Linux x86-64使用的标准进行讲解。Windows中采用的Calling Convention和这里略有不同，因此建议使用docker环境进行试验和学习。对于Arm64环境的同学，建议是换到一台有x86-64环境的PC。
+-
+-## x86-64 寄存器
+-x64提供了以下通用寄存器。每个寄存器都可以访问其32-,16,8-bit的寄存器。
+-![registers](img/registers.png)
+-其中部分寄存器还具有特殊的含义，例如%rsp通常作为栈指针，%rbp作为栈帧基指针,%rax作为返回值等等。
+-
+-除了上面的寄存器外，还有一些特殊寄存器。例如%rip，%cs,%gs等等。这些寄存器主要和程序控制流相关，一般有特殊的指令进行修改。例如%rip寄存器是程序计数寄存器，用于指示当前执行到第几条指令。使用jmp指令可以跳转到某个地址，也就是改变%rip寄存器的值。
+-
+-## Linux x64 stack frame
+-![stack frame](img/x64_frame_nonleaf.png)
+-```c
+-long myfunc(long a, long b, long c, long d,
+-            long e, long f, long g, long h)
+-{
+-    long xx = a * b * c * d * e * f * g * h;
+-    long yy = a + b + c + d + e + f + g + h;
+-    long zz = utilfunc(xx, yy, xx % yy);
+-    return zz + 20;
+-}
+-```
+-上图是一个C函数的栈帧。
+-
+-栈帧是计算机内存中用于支持程序执行中的函数或过程调用的数据结构。当一个函数或过程被调用时，一个新的栈帧就会被创建并添加到程序的调用栈的顶部。
+-
+-每一个栈帧常常包含以下几个部分：
+-* 函数参数：当一个函数被调用时，它的参数（如有的话）会在内存中被保存进新的栈帧。
+-* 返回地址：栈帧也保留函数调用完成后的返回地址。这样，在函数执行完后，程序就能知道要跳回哪里去继续执行。
+-
+-* 局部变量：函数中定义的任何局部变量都存储在其栈帧中。
+-
+-* 帧指针：这是一个指向当前栈帧的指针，可用于快速访问栈帧中的数据。
+-
+-栈是由**高地址向低地址**增长的。每次压栈，rsp = rsp - 8。
+-
+-在调用另一个函数时，首先编译器会把参数传入寄存器，当参数多于6个时，多余的参数会被放入栈中，例如上图的h，g。 
+-
+-然后，执行call指令，跳转到函数，并在栈中保存函数地址。当进入新函数时，编译器会把%rbp压入栈中，然后把新的%rbp指向栈顶。
+-
+-最后，编译器会为临时变量xx,yy,zz预留空间。
+-
+-> 栈顶通常还会有一块red zone，但在linux中被忽略[[4]](#参考).。red zone通常用来作为函数临时数据的存放位置。[[5]](#参考)
+-## Calling Convention
+-![calling](img/calling.png)
+-* 用户级应用程序依次用以下寄存器来传递参数：%rdi、%rsi、%rdx、%rcx、%r8 和 %r9（指的是参数为指针或者8字节以下的整数类型的一般情况）。 
+-> 在Windows x64中，%rdx,%rcx分别是第一个和第二参数的寄存器
+-* %rax通常作为返回值寄存器
+-* caller-saved表示调用者保存，callee-saved表示被调者保存。%rbx,%rsp,%rbp,%12-%15的寄存器均需要被调用者提前保存。调用结束后再恢复这些寄存器（如果有用到）。此外，还有一些上图未提及的寄存器需要保存，例如%rip,%xmm0还有一些标志寄存器等等。
+-* 因此，理论上来说，在一个单线程的只执行整数运算的简单程序中，我们只需要保存上述的寄存器即可保存上下文。
+-
+-## 汇编代码
+-下面简单介绍一下后面所用到的汇编代码。
+-
+-* `pop A`： 把原先rsp指针指的内存的值放到A中，然后rsp=rsp+8
+-* `movq A B` : 
+-    * 其中(A) 表示把A当成指针，对A指向地址的内存
+-    * NUMBER(A),表示(A+NUMBER)，也就是A+NUMBER处的内存
+-* `push A`: 把A的值放到原来rsp处，然后rsp=rsp-8
+-* `ret`: pop A,jmp A。pop出一个地址，然后跳转到那个地址去执行。在函数调用时会有返回地址，调用结束后会回到那个返回地址
+-
+-
+-
+-# 实验环境搭建
+-实验环境要求下面几个部分：
+-1. x86-64 linux环境
+-2. gcc,make
+-
+-因此如果你有linux环境，例如wsl或者云服务器，可以直接在上面进行实验。
+-
+-为了方便大家进行实验，我们搭建了一个devcontainer。只有windows的同学仅需要安装docker和vscode devcontainer插件即可。
+-
+-PS: github上的code space也可以用。但我没有测试过。
+-
+-## 使用devcontainer
+-### 安装vscode
+-[Windows](https://vscode.cdn.azure.cn/stable/1ad8d514439d5077d2b0b7ee64d2ce82a9308e5a/VSCodeUserSetup-x64-1.74.1.exe) 
+-
+-[Mac OS](https://vscode.cdn.azure.cn/stable/e8a3071ea4344d9d48ef8a4df2c097372b0c5161/VSCode-darwin-universal.zip)
+-### 安装dev container插件
+- 在vscode插件市场安装devcontainer:
+-![devcontainer](img/devcontainer.png)
+-
+-> 如果你在Windows下使用dev container的插件，并且安装了wsl，可能需要手动将插件版本等级降级到v0.266.1
+-> 
+-> [参考](https://github.com/microsoft/vscode-remote-release/issues/8172)
+-> ![downgrade](img/install_another_version.png)
+-> 选择较低版本后，reload window即可。
+-
+-### 安装Docker
+-* 可以参考这个链接: [安装docker](https://github.com/rust-real-time-os/os_lab/tree/lab2#docker%E5%AE%89%E8%A3%85%E5%8F%8A%E6%8B%89%E5%8F%96%E4%BB%A3%E7%A0%81)
+-* 也可以在vscode里按ctrl+shift+P,输入`install`
+-#### troubleshooting
+-![docker_install](img/docker_install.png)
+-
+-如果安装遇到上面问题，可能需要安装一下wsl2。[一个参考](https://blog.csdn.net/qq_43636384/article/details/128453416)
+-
+-### git clone 本项目
+-#### git 安装
+-[链接](https://registry.npmmirror.com/-/binary/git-for-windows/v2.42.0.windows.2/Git-2.42.0.2-64-bit.exe)
+-
+-#### clone
+-
+-* 也可以下载，最好是clone，这样有更新就可以拉取到了。
+-```bash
+-git clone https://github.com/rust-real-time-os/easy_lab.git
+-
+-# git clone https://gitee.com/ruiqurm/easy_lab.git
+-```
+-### 使用dev container启动
+-打开项目文件夹
+-![Alt text](img/open_folder.png)
+-
+-打开的时候`.devontainer`要在第一层文件夹：
+-
+-![container](img/container.png)
+-
+-按ctrl+shift+P或者F1，输入reopen.. 选择下面这个选项即可使用dev container
+-![open](img/open.png)
+-
+-# 用户态线程
+-下面你需要实现一个简单的有栈协程。
+-
+-有栈协程可以在执行期间保存完整的函数调用栈状态，这意味着当协程被暂停时，它可以在稍后恢复执行，继续执行被中断的地方。
+-> 与有栈对应的是无栈协程。无栈协程并不是不需要栈，而是用的就是默认的栈。它的局部变量保存在堆分配内存上，因此每次切换实际上只需要管理控制流。对于无栈协程，它每次切换接近于函数调用。
+-> 我们这里实现的有栈协程和内核中线程的实现更为相近。感兴趣的话可以阅读其他教学内核中关于线程切换部分。
+-
+-我们已经提供了一个简单的代码框架在：`uthread.h`和`uthread.c`。
+-
+-具体来说，你需要实现这样的用户态线程框架：
+-
+-* 用户程序调用`uthread_create`创建一个协程，放入调度队列中。
+-* 创建完全部的协程后，主线程调用`schedule()`阻塞进入调度程序，开始执行各个协程。调度采用FIFO(先进先出)的顺序
+-* 线程开始执行的时候，首先跳转到函数`_uthread_entry`,然后才进入对应的函数
+-* 当协程中的函数调用`uthread_yield`时，控制权转让给调度器
+-* 当调度器执行`uthread_resume`时，会重新在中断的地方开始执行
+-* 当调度器发现函数执行结束时，会调用`thread_destory`销毁结构体。
+-
+-
+-
+-## 你的任务
+-修改代码，通过测试recursion.c，simple.c和pingpong.c
+-
+-执行
+-```
+-make 
+-```
+-即可编译uthread.c和所有测试。
+-
+-使用
+-```
+-make tests
+-```
+-运行测试。
+-
+-
+-
+-你可能主要需要修改下面的函数：
+-* 初始化系统：`init_uthreads`
+-* 初始化每个用户态线程：`uthread_create`
+-* 调度: `schedule`
+-* 切换线程: `uthread_yield`和 `uthread_resume`
+-* _uthread_entry : 函数的入口
+-
+-除此以外，你可能还需要一些helper函数，例如调度时的FIFO，你可以用数组实现也可以用链表实现（建议用链表）。
+-
+-你可以随意修改uthread.c/h和switch.S的其他部分。只要最终能编译并通过测试即可。
+-
+-## Guideline
+-如果你不知道从哪里开始，你可以参考下面的建议。
+-
+-1. 阅读switch.S的代码
+-2. 阅读`struct context`的成员变量，看如何使用该结构体与`thread_switch`交互
+-2. 写一个简单的demo，尝试调用`thread_switch`
+-4. 阅读uthread.c上面的框架，看`_uthread_entry`需要传哪些参数。
+-
+-在阅读的过程中，你可能会遇到很多没学过的知识，比如你可能读不明白汇编代码的含义。这时我们建议用chatGPT之类的大模型工具来辅助快速上手学习。
+-
+-例如，你可以问它这段汇编代码的含义
+-![llm_example](img/llm_example.png)
+-
+-
+-## TIPS
+-* 注意栈需要16字节对齐，下面的代码可以帮你对齐：
+-```
+-address & -16L
+-```
+-完成对齐后，还需要将栈指针向下移动一个字长（-8字节），让它8字节对齐但是不16字节对齐（这和我们的汇编部分的实现有关，后面切换线程进入新函数会压入一个%rbp，使得栈指针16字节对齐）。如果后面发现segment fault，可能是这里有问题
+-* 注意栈是向下增长的，因此你初始化时栈指针应该是在高地址的
+-* 对于线程切换，我们提供了一段汇编代码在`switch.S`中。你也可以使用ucontext.h或者自己用汇编实现一段逻辑。
+-* 每个线程的入口都是`_uthread_entry`，然后在内部再去调用对应的线程函数。
+-* 注意设置标志位，以及利用标志位检查需要运行的线程。
+-* `_uthread_entry`结束后，需要回到调度器，因此你需要调用thread_switch
+-* 你可以使用全局`current_thread`和`main_thread`来保存当前执行的主线程和用户态线程的上下文。
+-* 你可以使用gdb来调试bug
+-## Challenge 
+-* thread_swtich里只保存了整数寄存器的上下文。如何拓展到浮点数？
+-* 上面我们只实现了一个1 kthread :n uthread的模型，如何拓展成m : n的模型呢
+-* 上述的实现是一个非抢占的调度器，如何实现抢占的调度呢？
+-* 在实现抢占的基础上，如何去实现同步原语（例如，实现一个管道channel）
+-
+-# 提交方式与评分
+-你需要提交你的代码以及一份简单的报告。
+-
+-报告的内容包括：简单阐述你的实现，实验中遇到的困难，你的思考等等，报告数百字即可。
+-
+-报告占比30%,实验70%
+-
+-提交方式为暂时为生成一个patch，在[平台](http://10.109.246.160:8765/admin)(使用校园网访问)提交。如何生成patch,详见[提交](https://github.com/rust-real-time-os/os_lab/tree/lab1#%E6%8F%90%E4%BA%A4)。如果出现提交问题，可以参考zulip上面的[汇总](https://rros.zulipchat.com/#narrow/stream/376116-general/topic/.5B.E6.8F.90.E4.BA.A4.E9.94.99.E8.AF.AF.E8.AF.B7.E5.85.88.E7.9C.8B.E6.AD.A4.E8.B4.B4.5D)
+-
+-
+-# 参考
+-1. [AMD64 Architecture Programmer’s Manual, Volume 1: Application Programming.](https://www.scs.stanford.edu/05au-cs240c/lab/amd64/AMD64-1.pdf)
+-2. [X86-64 Architecture Guide](http://6.s081.scripts.mit.edu/sp18/x86-64-architecture-guide.html)
+-3. [mit 6.s081 user level thread](https://pdos.csail.mit.edu/6.S081/2020/labs/thread.html)
+-4. [System V Application Binary Interface](https://refspecs.linuxbase.org/elf/x86_64-abi-0.99.pdf) 
++# User Level Thread
++## 截止: 2023.10.21 23:59
++助教 qiuqichen@bupt.edu.cn
++# 背景
++为了方便讲解，以下都以Linux x86-64使用的标准进行讲解。Windows中采用的Calling Convention和这里略有不同，因此建议使用docker环境进行试验和学习。对于Arm64环境的同学，建议是换到一台有x86-64环境的PC。
++
++## x86-64 寄存器
++x64提供了以下通用寄存器。每个寄存器都可以访问其32-,16,8-bit的寄存器。
++![registers](img/registers.png)
++其中部分寄存器还具有特殊的含义，例如%rsp通常作为栈指针，%rbp作为栈帧基指针,%rax作为返回值等等。
++
++除了上面的寄存器外，还有一些特殊寄存器。例如%rip，%cs,%gs等等。这些寄存器主要和程序控制流相关，一般有特殊的指令进行修改。例如%rip寄存器是程序计数寄存器，用于指示当前执行到第几条指令。使用jmp指令可以跳转到某个地址，也就是改变%rip寄存器的值。
++
++## Linux x64 stack frame
++![stack frame](img/x64_frame_nonleaf.png)
++```c
++long myfunc(long a, long b, long c, long d,
++            long e, long f, long g, long h)
++{
++    long xx = a * b * c * d * e * f * g * h;
++    long yy = a + b + c + d + e + f + g + h;
++    long zz = utilfunc(xx, yy, xx % yy);
++    return zz + 20;
++}
++```
++上图是一个C函数的栈帧。
++
++栈帧是计算机内存中用于支持程序执行中的函数或过程调用的数据结构。当一个函数或过程被调用时，一个新的栈帧就会被创建并添加到程序的调用栈的顶部。
++
++每一个栈帧常常包含以下几个部分：
++* 函数参数：当一个函数被调用时，它的参数（如有的话）会在内存中被保存进新的栈帧。
++* 返回地址：栈帧也保留函数调用完成后的返回地址。这样，在函数执行完后，程序就能知道要跳回哪里去继续执行。
++
++* 局部变量：函数中定义的任何局部变量都存储在其栈帧中。
++
++* 帧指针：这是一个指向当前栈帧的指针，可用于快速访问栈帧中的数据。
++
++栈是由**高地址向低地址**增长的。每次压栈，rsp = rsp - 8。
++
++在调用另一个函数时，首先编译器会把参数传入寄存器，当参数多于6个时，多余的参数会被放入栈中，例如上图的h，g。 
++
++然后，执行call指令，跳转到函数，并在栈中保存函数地址。当进入新函数时，编译器会把%rbp压入栈中，然后把新的%rbp指向栈顶。
++
++最后，编译器会为临时变量xx,yy,zz预留空间。
++
++> 栈顶通常还会有一块red zone，但在linux中被忽略[[4]](#参考).。red zone通常用来作为函数临时数据的存放位置。[[5]](#参考)
++## Calling Convention
++![calling](img/calling.png)
++* 用户级应用程序依次用以下寄存器来传递参数：%rdi、%rsi、%rdx、%rcx、%r8 和 %r9（指的是参数为指针或者8字节以下的整数类型的一般情况）。 
++> 在Windows x64中，%rdx,%rcx分别是第一个和第二参数的寄存器
++* %rax通常作为返回值寄存器
++* caller-saved表示调用者保存，callee-saved表示被调者保存。%rbx,%rsp,%rbp,%12-%15的寄存器均需要被调用者提前保存。调用结束后再恢复这些寄存器（如果有用到）。此外，还有一些上图未提及的寄存器需要保存，例如%rip,%xmm0还有一些标志寄存器等等。
++* 因此，理论上来说，在一个单线程的只执行整数运算的简单程序中，我们只需要保存上述的寄存器即可保存上下文。
++
++## 汇编代码
++下面简单介绍一下后面所用到的汇编代码。
++
++* `pop A`： 把原先rsp指针指的内存的值放到A中，然后rsp=rsp+8
++* `movq A B` : 
++    * 其中(A) 表示把A当成指针，对A指向地址的内存
++    * NUMBER(A),表示(A+NUMBER)，也就是A+NUMBER处的内存
++* `push A`: 把A的值放到原来rsp处，然后rsp=rsp-8
++* `ret`: pop A,jmp A。pop出一个地址，然后跳转到那个地址去执行。在函数调用时会有返回地址，调用结束后会回到那个返回地址
++
++
++
++# 实验环境搭建
++实验环境要求下面几个部分：
++1. x86-64 linux环境
++2. gcc,make
++
++因此如果你有linux环境，例如wsl或者云服务器，可以直接在上面进行实验。
++
++为了方便大家进行实验，我们搭建了一个devcontainer。只有windows的同学仅需要安装docker和vscode devcontainer插件即可。
++
++PS: github上的code space也可以用。但我没有测试过。
++
++## 使用devcontainer
++### 安装vscode
++[Windows](https://vscode.cdn.azure.cn/stable/1ad8d514439d5077d2b0b7ee64d2ce82a9308e5a/VSCodeUserSetup-x64-1.74.1.exe) 
++
++[Mac OS](https://vscode.cdn.azure.cn/stable/e8a3071ea4344d9d48ef8a4df2c097372b0c5161/VSCode-darwin-universal.zip)
++### 安装dev container插件
++ 在vscode插件市场安装devcontainer:
++![devcontainer](img/devcontainer.png)
++
++> 如果你在Windows下使用dev container的插件，并且安装了wsl，可能需要手动将插件版本等级降级到v0.266.1
++> 
++> [参考](https://github.com/microsoft/vscode-remote-release/issues/8172)
++> ![downgrade](img/install_another_version.png)
++> 选择较低版本后，reload window即可。
++
++### 安装Docker
++* 可以参考这个链接: [安装docker](https://github.com/rust-real-time-os/os_lab/tree/lab2#docker%E5%AE%89%E8%A3%85%E5%8F%8A%E6%8B%89%E5%8F%96%E4%BB%A3%E7%A0%81)
++* 也可以在vscode里按ctrl+shift+P,输入`install`
++#### troubleshooting
++![docker_install](img/docker_install.png)
++
++如果安装遇到上面问题，可能需要安装一下wsl2。[一个参考](https://blog.csdn.net/qq_43636384/article/details/128453416)
++
++### git clone 本项目
++#### git 安装
++[链接](https://registry.npmmirror.com/-/binary/git-for-windows/v2.42.0.windows.2/Git-2.42.0.2-64-bit.exe)
++
++#### clone
++
++* 也可以下载，最好是clone，这样有更新就可以拉取到了。
++```bash
++git clone https://github.com/rust-real-time-os/easy_lab.git
++
++# git clone https://gitee.com/ruiqurm/easy_lab.git
++```
++### 使用dev container启动
++打开项目文件夹
++![Alt text](img/open_folder.png)
++
++打开的时候`.devontainer`要在第一层文件夹：
++
++![container](img/container.png)
++
++按ctrl+shift+P或者F1，输入reopen.. 选择下面这个选项即可使用dev container
++![open](img/open.png)
++
++# 用户态线程
++下面你需要实现一个简单的有栈协程。
++
++有栈协程可以在执行期间保存完整的函数调用栈状态，这意味着当协程被暂停时，它可以在稍后恢复执行，继续执行被中断的地方。
++> 与有栈对应的是无栈协程。无栈协程并不是不需要栈，而是用的就是默认的栈。它的局部变量保存在堆分配内存上，因此每次切换实际上只需要管理控制流。对于无栈协程，它每次切换接近于函数调用。
++> 我们这里实现的有栈协程和内核中线程的实现更为相近。感兴趣的话可以阅读其他教学内核中关于线程切换部分。
++
++我们已经提供了一个简单的代码框架在：`uthread.h`和`uthread.c`。
++
++具体来说，你需要实现这样的用户态线程框架：
++
++* 用户程序调用`uthread_create`创建一个协程，放入调度队列中。
++* 创建完全部的协程后，主线程调用`schedule()`阻塞进入调度程序，开始执行各个协程。调度采用FIFO(先进先出)的顺序
++* 线程开始执行的时候，首先跳转到函数`_uthread_entry`,然后才进入对应的函数
++* 当协程中的函数调用`uthread_yield`时，控制权转让给调度器
++* 当调度器执行`uthread_resume`时，会重新在中断的地方开始执行
++* 当调度器发现函数执行结束时，会调用`thread_destory`销毁结构体。
++
++
++
++## 你的任务
++修改代码，通过测试recursion.c，simple.c和pingpong.c
++
++执行
++```
++make 
++```
++即可编译uthread.c和所有测试。
++
++使用
++```
++make tests
++```
++运行测试。
++
++
++
++你可能主要需要修改下面的函数：
++* 初始化系统：`init_uthreads`
++* 初始化每个用户态线程：`uthread_create`
++* 调度: `schedule`
++* 切换线程: `uthread_yield`和 `uthread_resume`
++* _uthread_entry : 函数的入口
++
++除此以外，你可能还需要一些helper函数，例如调度时的FIFO，你可以用数组实现也可以用链表实现（建议用链表）。
++
++你可以随意修改uthread.c/h和switch.S的其他部分。只要最终能编译并通过测试即可。
++
++## Guideline
++如果你不知道从哪里开始，你可以参考下面的建议。
++
++1. 阅读switch.S的代码
++2. 阅读`struct context`的成员变量，看如何使用该结构体与`thread_switch`交互
++2. 写一个简单的demo，尝试调用`thread_switch`
++4. 阅读uthread.c上面的框架，看`_uthread_entry`需要传哪些参数。
++
++在阅读的过程中，你可能会遇到很多没学过的知识，比如你可能读不明白汇编代码的含义。这时我们建议用chatGPT之类的大模型工具来辅助快速上手学习。
++
++例如，你可以问它这段汇编代码的含义
++![llm_example](img/llm_example.png)
++
++
++## TIPS
++* 注意栈需要16字节对齐，下面的代码可以帮你对齐：
++```
++address & -16L
++```
++完成对齐后，还需要将栈指针向下移动一个字长（-8字节），让它8字节对齐但是不16字节对齐（这和我们的汇编部分的实现有关，后面切换线程进入新函数会压入一个%rbp，使得栈指针16字节对齐）。如果后面发现segment fault，可能是这里有问题
++* 注意栈是向下增长的，因此你初始化时栈指针应该是在高地址的
++* 对于线程切换，我们提供了一段汇编代码在`switch.S`中。你也可以使用ucontext.h或者自己用汇编实现一段逻辑。
++* 每个线程的入口都是`_uthread_entry`，然后在内部再去调用对应的线程函数。
++* 注意设置标志位，以及利用标志位检查需要运行的线程。
++* `_uthread_entry`结束后，需要回到调度器，因此你需要调用thread_switch
++* 你可以使用全局`current_thread`和`main_thread`来保存当前执行的主线程和用户态线程的上下文。
++* 你可以使用gdb来调试bug
++## Challenge 
++* thread_swtich里只保存了整数寄存器的上下文。如何拓展到浮点数？
++* 上面我们只实现了一个1 kthread :n uthread的模型，如何拓展成m : n的模型呢
++* 上述的实现是一个非抢占的调度器，如何实现抢占的调度呢？
++* 在实现抢占的基础上，如何去实现同步原语（例如，实现一个管道channel）
++
++# 提交方式与评分
++你需要提交你的代码以及一份简单的报告。
++
++报告的内容包括：简单阐述你的实现，实验中遇到的困难，你的思考等等，报告数百字即可。
++
++报告占比30%,实验70%
++
++提交方式为暂时为生成一个patch，在[平台](http://10.109.246.160:8765/admin)(使用校园网访问)提交。如何生成patch,详见[提交](https://github.com/rust-real-time-os/os_lab/tree/lab1#%E6%8F%90%E4%BA%A4)。如果出现提交问题，可以参考zulip上面的[汇总](https://rros.zulipchat.com/#narrow/stream/376116-general/topic/.5B.E6.8F.90.E4.BA.A4.E9.94.99.E8.AF.AF.E8.AF.B7.E5.85.88.E7.9C.8B.E6.AD.A4.E8.B4.B4.5D)
++
++
++# 参考
++1. [AMD64 Architecture Programmer’s Manual, Volume 1: Application Programming.](https://www.scs.stanford.edu/05au-cs240c/lab/amd64/AMD64-1.pdf)
++2. [X86-64 Architecture Guide](http://6.s081.scripts.mit.edu/sp18/x86-64-architecture-guide.html)
++3. [mit 6.s081 user level thread](https://pdos.csail.mit.edu/6.S081/2020/labs/thread.html)
++4. [System V Application Binary Interface](https://refspecs.linuxbase.org/elf/x86_64-abi-0.99.pdf) 
+ 5. [Stack frame layout on x86-64](https://eli.thegreenplace.net/2011/09/06/stack-frame-layout-on-x86-64/)
+\ No newline at end of file
+diff --git a/demo.c b/demo.c
+index 304a290..a802025 100644
+--- a/demo.c
++++ b/demo.c
+@@ -1,37 +1,37 @@
+-#include "uthread.h"
+-#include <stdlib.h>
+-#include <string.h>
+-#include <stdio.h>
+-static struct uthread *current_thread = NULL;
+-static struct uthread *main_thread = NULL;
+-
+-extern void thread_switch(struct context *from, struct context *to);
+-
+-void bug(){
+-    printf("missing return address\n");
+-    exit(-1);
+-}
+-
+-void test(){
+-    printf("hello,%d\n",1);
+-    thread_switch(&current_thread->context,&main_thread->context);
+-}
+-
+-int main(){
+-    long long sp;
+-    main_thread = malloc(sizeof(struct uthread));
+-    memset(main_thread,0,sizeof(struct uthread));
+-
+-    current_thread = malloc(sizeof(struct uthread));
+-    memset(current_thread,0,sizeof(struct uthread));
+-
+-    current_thread->context.rip = (long long)test;
+-    sp = ((long long)&current_thread->stack + STACK_SIZE) & (~(long long)15);
+-    sp -= 8;
+-    *(long long*)sp = (long long)bug;
+-    current_thread->context.rsp = sp;
+-
+-    thread_switch(&main_thread->context,&current_thread->context);
+-    printf("main\n");
+-    return 0;
++#include "uthread.h"
++#include <stdlib.h>
++#include <string.h>
++#include <stdio.h>
++static struct uthread *current_thread = NULL;
++static struct uthread *main_thread = NULL;
++
++extern void thread_switch(struct context *from, struct context *to);
++
++void bug(){
++    printf("missing return address\n");
++    exit(-1);
++}
++
++void test(){
++    printf("hello,%d\n",1);
++    thread_switch(&current_thread->context,&main_thread->context);
++}
++
++int main(){
++    long long sp;
++    main_thread = malloc(sizeof(struct uthread));
++    memset(main_thread,0,sizeof(struct uthread));
++
++    current_thread = malloc(sizeof(struct uthread));
++    memset(current_thread,0,sizeof(struct uthread));
++
++    current_thread->context.rip = (long long)test;
++    sp = ((long long)&current_thread->stack + STACK_SIZE) & (~(long long)15);
++    sp -= 8;
++    *(long long*)sp = (long long)bug;
++    current_thread->context.rsp = sp;
++
++    thread_switch(&main_thread->context,&current_thread->context);
++    printf("main\n");
++    return 0;
+ }
+\ No newline at end of file
+diff --git a/example.patch b/example.patch
+new file mode 100644
+index 0000000..0c90e96
+--- /dev/null
++++ b/example.patch
+@@ -0,0 +1,726 @@
++From 3f2e95ad6aa8af0f79b013e02590fad7487384e0 Mon Sep 17 00:00:00 2001
++From: alantu <alan020113@gmail.com>
++Date: Fri, 13 Oct 2023 22:35:57 +0800
++Subject: [PATCH] first commit
++
++---
++ Makefile   |   2 +-
++ demo       | Bin 0 -> 18880 bytes
++ pingpong   | Bin 0 -> 22304 bytes
++ pingpong.c |   4 +-
++ recursion  | Bin 0 -> 22400 bytes
++ simple     | Bin 0 -> 22376 bytes
++ uthread.c  | 121 ++++++++++++++++++++++++++++++++++++++++++++++++++++-
++ uthread.h  |   1 +
++ 8 files changed, 124 insertions(+), 4 deletions(-)
++ create mode 100644 demo
++ create mode 100644 pingpong
++ create mode 100644 recursion
++ create mode 100644 simple
++
++diff --git a/Makefile b/Makefile
++index 8a0156a..1768948 100644
++--- a/Makefile
+++++ b/Makefile
++@@ -24,4 +24,4 @@ tests: simple pingpong recursion
++ 	./recursion
++ 
++ clean:
++-	rm -f simple uthread.o switch.o test_simple.S pingpong recursion
++\ No newline at end of file
+++	rm -f simple uthread.o switch.o test_simple.S pingpong recursion demo
++\ No newline at end of file
++diff --git a/demo b/demo
++new file mode 100644
++index 0000000000000000000000000000000000000000..e89766c3798bd99e90c11f50dd5ad60e35d06cdc
++GIT binary patch
++literal 18880
++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
++
++literal 0
++HcmV?d00001
++
++diff --git a/pingpong b/pingpong
++new file mode 100644
++index 0000000000000000000000000000000000000000..88e9f811082e1fe958e727a6cdc8f219f2e75d40
++GIT binary patch
++literal 22304
++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
++
++literal 0
++HcmV?d00001
++
++diff --git a/pingpong.c b/pingpong.c
++index 1d59c4f..fb533aa 100644
++--- a/pingpong.c
+++++ b/pingpong.c
++@@ -27,8 +27,8 @@ void test_func1(void* _arg){
++ 
++ int main(){
++     init_uthreads();
++-    uthread_create(test_func1,(void*)1,NULL);
++-    uthread_create(test_func1,(void*)2,NULL);
+++    uthread_create(test_func1,(void*)1,"thread1");
+++    uthread_create(test_func1,(void*)2,"thread2");
++     schedule();
++     return 0;
++ }
++\ No newline at end of file
++diff --git a/recursion b/recursion
++new file mode 100644
++index 0000000000000000000000000000000000000000..3986ecb4939276856dfcd312a890eb4f09cd835f
++GIT binary patch
++literal 22400
++zcmeHPdvsjId7rzhS*;{XTD@$^@?(Xc*l1<>g@G8av1C?8w&jNsn*hsdcO`9*cE#>p
++zKd21`1>%kBMowu$PaQBNG$DZkX%3-=VkM^7P7gUIC&doQ>2YYFa&a0bCXL%9sK0L>
++zyLYdp<eWDBPouN*ee=EMn{U2*@7$}o_kq^-^$x>ex;WX*j9MceN%1R&f0IH0{A?8~
++zMLmzrWiGS}1Woe&5`ZhqIY&NpE4mYq^lAwi2hNaWrlIzbAn8q1&J;?HhD?ov^f<9p
++z+YX;rdKzkewm&Z^qj*J~g;SLO8d~)zHU}D|{DIZ^a9G7<L_w`bP0|}ydc#Uj!%O54
++ziiSF#6chTbQvTSX7d$FnQ8Q-O+oAOAutmvhNPSS*_MRE}-}Kj^^jf^a470;WC7Efc
++z``ZFNHAPC|_X9o6TUCD(&BFl|e+^Z5SyNxEYvuB$zDQ$VES}!exM$VM#+A!`sf2H-
++z=$QPXJ}9Sd-PFk(2iOSFv_9e0_)%DiKYPl`6W_k`&7qawjo%wye(;?KmmNQ@ZIBMh
++zP$7Ap64WNV6hD%oykP7>Q4@{IThZ_JOKkjl4ak+_u;x!d|8vm2<H&bRARn55zG?#c
++z^Pqe2vloixcz(7_K)-DQ`m_n?uYvBx&t41=uCWuT9Snx|go53%c&IOSUzGKS`uY-K
++zHjqfg_5}N*XvTWt5JH-SgDEqVG=u%2Se${CikhrD8I7`mXfl~dvgn?e2}uZr?+J!`
++z?+JE?Vts5N8H=0UjPxn1R<c{$+iqDGT<Tk%#g^sJrM?v`*tUIRFcM8hdtxawn%ur|
++zU0)&|-5%=di^6<Qe<H3N2};p%1u3JP$fg272O!lNqhTB1_5$kTr#coxsui%LqJ8u5
++z7m$WdwokRw(_=+s^D}5u(dRjRemPnp=?B$$Ow;dHbhlsfHC?yQQR1Rd&RdU%^A@@~
++zWeK@a3*CC2xMZPE5t6dHVxj9}i8zlbI@zGy(B-IwPRFe-U$xN1^+hpWu+ZgkD;Y0a
++z=z7e=8L`k2&}=znp%-VVjGeL2ODyzBbTR^y5txj?WCSK7Fd2c#2>hW4TrQvW-+{r4
++z?!XZLVH0D4heu4u*qOlK>+Tamb!<f!$Yb*&sLN;jfl<4cco)u(q0GCT+O$-<a7MJZ
++zQk#}+7e+*T1GQ<XcHsrlzJ=Pfgt~B4v~Q#~EuAh5i}q4#(~{}J0nuJWZCZ|97|7~(
++z52Gy#`QQArw#-|11v2jj27h{~V|#1!Nb~8yq1A10YOLn6kFgKCedV)1E#yJ3gTcTd
++zUP<7FD`pLb{x*bY=tX1a%V!@T!4nEX{sJ)%t$3HfwI2mCmjd7Zk2QgBUvUPEHv(^c
++zWLCq#)5?H*?0k3mY}~YHee&<XYGSkW;?BU}>W2soWZpBU1cp{Wg2w2z7}jV6)f;?2
++z+QyyG&C|cI8%#3P3B7HYt=i1~i-Y?wvUK6g6!;GsUPjGEFCxlAtrr8~bEpSLjm*i>
++zH=r3PfBr;Z=*}yrPiPx3;SFT=j|PTXM>DOz9cuk8ME{CJGjAX=7qK7?WKK$>i$5A0
++z8_uap;!Bu62%Zvx-+7G|rf7aiSU5TQD4as`S;eL0DVh%`?k;epm9HU71a@c6v&{Z0
++z@ajt7q+hI#1wPb)^aL&A8Ma93F=W!`kJH`C=##&r0YGkW{}q<5Lzhi*AfsOd=Qu@b
++z^h+c|wuU;-!=9}x1jO$~9;9c2fkr3#6nz6%Fyr}PhGarAPe2OiB4rJ7V2IKS(*+;c
++z2OZJ?V%&O3qdEJU0(qne+{lFj(xgNYx`YWDP5f4l=JW~540Pzhtcv&@+kuYgo|h(a
++zbT{NIa|l5{1kVLB=`(>$=c!0ws9@egA=`STc_eVM^^(v$)OzVyFGBkog;)2NL24oO
++z%vp%<6-;e5Q5@*xIOce4bd_}L(#ZomNRyPw;i1k`fz0sTAc-cYdrY$Gr^FzEL&JhZ
++z=-|5;;ILcE4&~6ne|K9shiXnxwq=xRCk2#L{aMvcjB_}UYhuX59l9y<y>_v5L?n>(
++z^hzYKxLU--<fFB}85_%+S5IJwUtR<y%+YM%KPNoH&lA9T6hIE0QVwByS+GxzzH3cT
++zb2U6ge&KKt0pfoRsUZ=u!7Gk*ISdUez3)hYjA-)v06utT*gBs>JPM-hlg_lz-7bXb
++zXueTkCr3|+S>fxbsUyuBsikJ(ZE|M0K05P`G>^_J%eaL1{NlCL9R`v$`7TkcCVv8t
++ztlnDElzRNyf7z4MD|*YMF^`=%@>;Lt^-9MjI48%xpJUPG27~UQuC*iZ$?C-?^SwAu
++zi9H%e-+>Ho5`*9iEuNnoeMZKsO4zKaDuQX1y@&YwI9kZ}R%8awNjP8c2xJNanI7b3
++z0>KK_wr6_0?U}^F_RQ`j?U@HwwGZ8o->xO?L-B>}L*3rM&|S5Gp*S+B8|M*MM_cBX
++zZA16@+lG>XwxO*Z;)ICf)SbH$!~e-L8G*?NOh#Zb0+SJ#jKE|B{s<AE{{YSF>x-}u
++z>mqaO@xQ5P#A_zJ;vZfiGwQ{^v=Yg^-tI)wdv7|Lj(X#XNR-L{ZHfPR8THPahM`OU
++z()sbv$Hra<?7K8Jb`fwN;In|yUyO|vU~Tyf;9S6;0=59I`{meJ1h60Q(|~1{$Hu-4
++zI0*PU;8y{E3i$qq(8n@w&##~lcowh)aQ=TnAFvhh(}2$cei@Md_e#aMZ!0tQc#Qff
++zh3;Y4Av*0TI0ZlFlR!%$7J>{r85moRp9gdr3oG-iFRR^9Ub5SLfUTK+)1qZ_uOTw&
++z-+|vA$cZ~tBBGE@6Th7pFK++gP?_fu$GTEi>!5QN`X>IP`0WS(CM!P)CfdaRCVr2B
++zAGGov9~T0|{{eny!N;0CXFrtF{}AM#fd8bG?|3Y$Uybp1A@1oseqWYPYyWS7Kacop
++zmH&6=>~9DERq$^H%#P2w!XODTe$d~+JbpgUekN=GQSjR_pA(Jmo8S+Dzd28TeOCVm
++z;2#5jwv{i#Bl`ak{J#gk$I5rymDR6CUNGd5_)oi@A4j|3lgeb7jKE|BCL=HzfyoF=
++zMqn}mlM$GV!2fpy^!_-#9}Y`cQF;~3?pYIeDRM6;u^yw1jwp2!WcS_GtG2#3nXcM;
++z{~fK<sc8PMJ{n6<`zZb207dU%t5t~JyLL+Pi=`Mlr=Z?@R;$`I3TmL#*a5X)jh5h4
++zMns*vPt$w$)UcRG5j4F+Iimg6`gklaitc}wYHK+>pcmsqTm=dL%@l2qvWNdYX}-|J
++z?UQI<Qsc)z2t-?tLz(}h0llx=Zg8cV@AV3PT)}PycPaRYf?rVZZxpoK`$KKFUrOA%
++zZrzREg`HjLxS94gH~W_RmNYh}MYH+-rAvKFmS3yLQvNysIj1t>&!~N!|03B})l&W`
++zs7U$Gs7=4G;Xlgb6)9f>VJRO_3DPm1FlbM}GG~SmE;<gvOcJD{XgtpxZvGNj4tHTQ
++z^ok2O_T-|)UnHWZU=u*eVN`_$`-n2dMWCPx6)WgMN*R(~a4&Eta}*S=gqbNnL~Dnm
++z+Fe5u$=Cp^DP2b@MluDwl5n??>;gWGa1Zc3tY!w`wMMdeDXVE9+zWgetC>&uLg33;
++z&0@lr0AImsmJq(mNJe68s<7{eec-}=0Q5a<s<7W7HjuMkk7Jg52V5$n;5cRroVmzZ
++zZ{;9J%;S0tbwkY-)H^(`C&0O;JdGOvvn`JS($BL3+_7@zFkB0PRS>Ok0F}dV(~Y^q
++zQP@bpa5ab)r!FhqRWY;*K2b%xAKV8~UHby)oK@dWQcV?S(4wF7pQ-u+Rn#*pq#zc)
++zgR15|A`*v*WS##Dpqx$JLga`s<zrwJA^bv*vuRI};guy6rFxMRwT}ZeYB&ilRB0Ck
++zPQ^G<M?0L2a@WsP0*i+<g0l<S)5`>RDs}HTyrVvp>|utdh)g*S_puodfo^cona(ru
++z6i67D83(UU%HF|P9H$ma(UZ{eh!kyu7^SHFVE7!Fmnm974@X>YO<OBSB3&!TOV=uy
++zt`uRUD}f@Bu0<kUi}n${C@)=0RJwZ6fm3GdW=H`S*-E(EDYKPu4{*v>!fTx}TM739
++zr)(vBA#lo8!j}N2Y$be^Q)VmSe%PmMB|HE+Wh>zw^3k2h)-YTWPsfn0gv&$ATlqPl
++z%rix1>z%-Nc&5l~Jpd_WYmEs=zo~1%&1LH}qPhMARjvE?<tt7I*J0L6UV)^?aK8mm
++zco>yYR6{r`d=6Zrc-q@&xS5MW=lU9|l3PLd7-bHC!e4=4lnWVFNSSGPltKYL;apYo
++zBh*DsuO9|c3T8s&##*vp<XqwxG*<AZXx^lVs}!+r9~twP?jVq@n2W+Pow|0eE_)by
++z`-xA85dg=a1DBO<LAwBl3z7bU1Sn+ntaKxAzQG~rFA-f-q$3qwWT@;XsQ6;Xo7ys)
++zL0i4}fTQ$0k;o`3D+5|E*ZE7Lkabr28&aF$5MC8IwaJ-&@Qfe2E=>hQ>68EmV{t!p
++z-^?hwc%BEIapY6b<z~2xy*ZEK<T%{x{!5Z<PJ`h%d^e}#@_Y5<DvnY%i^w7Z%tflj
++z?}KsrQ_3uzt*97Bp4MhhYqPBQv#@)tUWrm-QZbI4(W1w)qO+eO&euyw=+zn$!`mYg
++zK*3ALpz)w<k>Y$l%W1$RuYnHxf;-UHu*fWo2>a~loVb|=cu^d?jEN_%War3dq2xXa
++z`OORDm;++Wn?EMU>~}u~wax7mcIV-j9}rj7jw%_fyRS*&)f8h(Ax)Fx@EvT<n-DW@
++zt3Ii^nFl%*<H)zD8#*!Ewu%yr+$w(>$Re_|Rf(siG{kW}WBgvWXaOOJe8KY&^NDQ7
++ztP~tZYgu-DF3S7j8d$4)QJsdL%v#zYE!E9XmfWOU*CYqfQSgswO;>h%+1zz7VpO~I
++zc~d+X7yiSU>RHkR0y-BoI^!<JsEqrelU+r81C3YkJ41#J7^TeVzOlh^Q^^e_ZB?tV
++zwsp*9B_%hPIC1)Sa@K}{7c6AXvKe4;T5`IeQI^wy^M&QCq`^&+ZlAHHPIDVvAFDG!
++zEUGZ(l~t8EXV=fJFe(c@Sk4ryKHNBe6d2C3n@dX2`;8^!1*uG_0<okdM<^8po+FeA
++zFNA`0yWB9^sz}$<0H>SaR>gebeI>ku?^RRDZKZ%kxbjpG7Sy#>NndMfj0M8!saZb1
++zp(MwjmL-dLNu^pJ6QfqfX^{TfeYj1jvq~?h(+u)*I=8svKwRsW(?lo}M3|AU+*YO4
++zvA~0Jo-8i5VyxD=yJ}(!&;usUkW)=vaAC(vab>5n&>mp7@YpI`r1PR!xhj|quKbaf
++zSmv_9EoS$s3@XizH80v_7IH)Bf;t)Q^1R+EXmWID#Qa~KZWZ}+Uzy9ks`0X~+MaAR
++zI=80k+?pnHt5)WgZJwo@)3eSaRdN|rPsdPhZpC;%W2m9cv}TeX6l1e=R?fEabHirL
++zYwb)cQZyP$j7}VI*Vwabjt@teOt<{$nrpSBS@+RBw^6}7(_p*YSyo?$BN~So8^Vuc
++zJwUIz8HVv29F_n$V=?@I%y!V(z5zc6@N!a7g;vFQsTxv#s<?rbtX@Y><As;Gr-v8q
++z;+0SE>TX_niW}{`zLytW<~+>}_hnwPhV#KE+^5~A`IINPu@j2`!}tKbk~_DN$?@EA
++zYIn9lLby~&D^VsY;Swzu4dK_rg#8&R2XBCL`i$$WGI;GPyy6%ydx#rpe*GH0!o8Zi
++z&+?-5d%Wf-uX>Ibzrx)Q@fkaL%`sm25E$IGgjYSpO9#2}3SZRBi!XDx$vr#yv|YU7
++zIbLh>vJJdAO~eXly~_D>e99}_xQ(xM*7&#+sCy^hc{BJ`@A0BXxXV4rc@O$6c20eq
++zS3>y-Ua^7C{#)+cz<uZVN>EJRvVqrbNb_R%VLlzG$*1q)#YCgNh+;vUyCHWwby?y5
++zB%gYmyG&kvJFhy+>rFoAY3_D6^OAjh#;d&a)E&I;eeQJjz0C`q(|p{R!|QM66$g2p
++z$(={}_3nqc)8t+>OxUc#?C?cPc-gOc<vZN@JfHb2F$^#k-OQbrDJ0%Cyv)6aJJ0g6
++z)BL(~lK&i^3af*>{Bb@fO{B83yc$N&a^pP*-sm)TVsdD@=^{ApbQ?6?VwxRa1ja;#
++zxzrcKsST@d%PXq|!C}B$+U!k6LlGukVr4;EW^E5_ZC%?EY}?efou%U`ybg<f1L59K
++zlBIeRNz<F9(LHr69y5c=NQ&XT)gEsok)}6S6)_lweKQI{bHGdnO=d<@X0SUQ59^M$
++zZQtC%QsLfcBn>s`554dTC9w-Z8`>L-VmpKALR8c}-mdnpYrbARx$rjjo9TFTbx$-N
++zO~%4#hLYjl)$$c@Z)1<Qaq|*yV|OUEHy-XyCgO>7sxckk9g9aAO?ull1*Ql@<3KWD
++zM#E+z*_bjR2u;NZ_k~iunjK5T!3cL-+WPfh87gv7g>!4?rcG^|Zq?0go!dHEH?_33
++zu<j7`6ASf;(FWCgs4&Ds{ZU2}w08^b&_M9|2UrU4EhCVEvWd2A#G|_f><`@&4Mx)a
++z{R4Z0;Y8ew?olr+D{B#i9y>np5;K_k&1dyuGdf9TUu=$x{U9uyP9~#qQ~Q(){Z%O-
++zy|cYU9Y_CKSH3H)rxHfthMwx(F*Dqo&6i{}mByeIQzS|xD*YjYEG5K!+gQ`?MDm{0
++zKqwqdHAOL}!M;$JNQkxDyi0w{Rv~T}Knj!O3y&|{lujj^V)1Za8bMUP`Fe3IL}CdA
++z<0cTzf*I1ltKCgK;cyf3D!6jF`i?+PJl)jXoVA9uiN$-Q5y(p<6742L4*(Y~abVLi
++zTksBl-c|6T>l^yHED^^mbk!+fzZkRgia?;ZzxUxjhKg6zSP=q_Cr{5)9ju&PvOQNM
++zJ)(Qn;}SGQS%#YE`gyh@i))I3r_~<6q>z79=$_ADHB3LB7DQCyK?Up_wb?%?<g2sK
++zyS4mRfQ;w=-%UXO2Vtj<dHq08^zcprCqMNKI2PrioK<vv53cF|3ObF~ehW2GJbx|h
++zR5AA)VK%QC&wnfh;LlWMe@<K`0$7>-eug&GAmpcIpSNrJ^`KY6Py21CU(xM%x|;=E
++zYv<tIO5T2>8=pXa2y|~wJ&Rq78!j)y^3R_o3FIrnPI>leZHr>RsOa{a_Yu%Nu%q)z
++zTcd|-l@3q#|0J4Dcf9JRQ<DT7oq$eHF2<9mXB-qy`yDzx#38!<G2#Ny$xr)umkWA%
++z_Ks9LbqnZT-LSwdpjY5_ML)0Cth<PgKdpp2T~X*k3i)HdXHN^d*3Q9$pnH)2et(We
++zSfjEtq7Ib#ihW4Q+v87<WvE~KgVx6t-TrLnIYrkCOMNT<EkV!sg<9X8fc_)UDL!_8
++z{%rzzES+@7@;aFTI{9yZLNQm-?a!>1f__b&1=-k0^0e;PCm1cWEu1u)eF=QIBh(cO
++znxP&BLdr~ccjGdY`^rbq><@-<MUAE)8A$|t`Vw8CzF-6w=u|M2-owI){(-)z8IAas
++zj4wgoFo|KsmJIC;$_r|D63Yd#0N4u^ODiarX;x9|wJ~>jv#d01*M3@w>1+9T%Zy-f
++z{noV`TZ35B1o4@YmYti{ZfsizFR(%jwgwb8(6W^UZ*AXv%i8wf=Jo5hwQdh?Uwcb?
++zYcRL|(@O-k4506=`1Kc5=wm6GFIR(CeWxWWi*Ky_zVE8!R$aEWQ7{?_nIR^E3-|Ls
++z?vk~>T&?r61aeKTr1D7GTeS$zt$i`)=th3mMXz<_!T_D-fAS?5NhN~4p?CzV<6zrn
++z=tM9V=~Og=bdn1r`4OAEo{<s}nCeQUR3~CBt(WR5VJI!s(oJmp&9gvDwmd>GxP9X~
++zHN*K!y?inHoXxo3sEMj|W&TY={s(#TO_3xXIHvaYV}TB6CME3E7*^QP<N))<v0nFK
++z4d%nj9iQhh_gY9@=@>ru6pJX*+FRPN-0xvRycf%P=8No&qYDYmq~z?1inU{2BM4qH
++z+7}`Pg$?wX%qQIR0rmAH&=d=AA03_$N{D>&MSIl&*&Bfo-IA*EAZ9{C<LDvO9}B}L
++zN=F~&k@;{+=*N)`TC^+O1IbXl2j>sfjK#YX8V_}KC8N7^3tzg5Y8-*nD3OsI*>*DC
++z(}yn*rSzHX{{(5j0xq#wL&;K$^CcAxXUJx@CRuBlg9hyp(E6*CzJ^|_FmSzY)8v&v
++ztol2YzJ~PZ*jn^;RnzEMiB(^(t2Oj$K?Uvlp8y?O))U(QqpE)mb^m(3Z}&e0eLT?3
++zj$iN7(6B=VjC>?i>tiJ%N(?o1sr%RaJ~TWh#j>?M{`Z1IdnmNN-Z!D4o<HrsmecTl
++z=+mAI-PZduH1w;U?fxq=I|PJcs`WcmM;eYOLEXQ7{PYln^lwpedf$nLBZ^M?)9|zF
++zKM5MeMBC3^=hgLI@5h0NDE9e30;*NttMoJ+R(cxfWrT)bvFX2{7#eDSwZ3j^_<~J;
++zMCogIE;}%3LHDcey=2qZ`;s)o8~Ay}KK@sgzMenkRpJV^sHO(mZ{2<!2*pq9w|FH-
++z!$)N^Tig5pJ~&qWb6zQ`A+67?#oqsq!Nfm@#4$v2`uk`4dxLg)-PUjvI^`C9eII;~
++zHc_BxIoZm!HJ#r1pea(PjqH7*{(j^o8XO88KUB1yp2x3)Mj~2Y@6$TaMA8_KsB@Lp
++z*YI~>S@oG;$u5yl_oJxU{&m|4WwNFF*XwqV(pNx>v#abupZdQ_P7xMoH6=o_R5Ywm
++z`jVQf{Yrm0M-rIF*7i=Ie@5xA)`3!bx?gSPx(W14Z;%peYzb@Ezi|TncKRm-3f&J`
++zi(P-c(pT<gMHl!b`r`@owVf>!=sVX*{i70OYpthYNa<$<6!MhPr*p2gXgy7%w#`Ms
++x8d3T$b169oV7&7;Jr8qAk-T~jUD#2!*_ihJ>G70JMCkofy8!H7n}V&${s%)@;ZXnp
++
++literal 0
++HcmV?d00001
++
++diff --git a/simple b/simple
++new file mode 100644
++index 0000000000000000000000000000000000000000..5ecb9c30dd6ad3e6fad11e1aad0ec2ed214aacb9
++GIT binary patch
++literal 22376
++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
++
++literal 0
++HcmV?d00001
++
++diff --git a/uthread.c b/uthread.c
++index 93926e9..ae0a5d1 100644
++--- a/uthread.c
+++++ b/uthread.c
++@@ -2,7 +2,58 @@
++ #include <stdio.h>
++ #include <stdlib.h>
++ #include <string.h>
++-#include <unistd.h>
+++#include <unistd.h> 
+++
+++// 闃熷垪鑺傜偣
+++struct QueueNode {
+++    struct uthread *thread;
+++    struct QueueNode *next;
+++};
+++
+++// 闃熷垪缁撴瀯
+++struct Queue {
+++    struct QueueNode *front;
+++    struct QueueNode *rear;
+++};
+++
+++// 鍒濆鍖栭槦鍒?+void initQueue(struct Queue *q) {
+++    q->front = q->rear = NULL;
+++}
+++
+++// 鍏ラ槦鍒?+void enqueue(struct Queue *q, struct uthread *thread) {
+++    struct QueueNode *newNode = (struct QueueNode *)malloc(sizeof(struct QueueNode));
+++    if (newNode == NULL) {
+++        perror("Failed to allocate memory for queue node");
+++        exit(EXIT_FAILURE);
+++    }
+++    newNode->thread = thread;
+++    newNode->next = NULL;
+++    if (q->rear == NULL) {
+++        q->front = q->rear = newNode;
+++        return;
+++    }
+++    q->rear->next = newNode;
+++    q->rear = newNode;
+++}
+++
+++// 鍑洪槦鍒?+struct uthread *dequeue(struct Queue *q) {
+++    if (q->front == NULL) {
+++        return NULL;
+++    }
+++    struct QueueNode *temp = q->front;
+++    q->front = q->front->next;
+++    if (q->front == NULL) {
+++        q->rear = NULL;
+++    }
+++    struct uthread *thread = temp->thread;
+++    free(temp);
+++    return thread;
+++}
+++
+++static struct Queue readyQueue;
++ 
++ static struct uthread *current_thread = NULL;
++ static struct uthread *main_thread = NULL;
++@@ -55,6 +106,22 @@ struct uthread *uthread_create(void (*func)(void *), void *arg,const char* threa
++         浣犻渶瑕佹敞鎰弐sp瀵勫瓨鍣ㄥ湪杩欓噷瑕?瀛楄妭瀵归綈锛屽惁鍒欏悗闈粠context switch杩涘叆鍏朵粬鍑芥暟鐨勬椂鍊欎細鏈塺sp瀵勫瓨鍣?         涓嶅榻愮殑鎯呭喌锛堣〃鐜颁负鍦╬rintf閲岄潰Segment Fault锛?   */
+++  uthread->state = THREAD_INIT;
+++  uthread->name = thread_name;
+++
+++  make_dummpy_context(&uthread->context);
+++
+++  uthread->context.rsp = ((long long)&uthread->stack + STACK_SIZE) & (~(long long)15);
+++  uthread->context.rsp -=8;
+++  uthread->context.rip = (long long)_uthread_entry;
+++
+++  uthread->context.rdi = (long long)uthread;
+++  uthread->context.rsi = (long long)func;
+++  uthread->context.rdx = (long long)arg;
+++
+++  //鎶婃柊鍒涘缓鐨勭嚎绋嬪姞鍏ュ埌闃熷垪涓?+  enqueue(&readyQueue, uthread);
+++
++   return uthread;
++ }
++ 
++@@ -64,12 +131,48 @@ void schedule() {
++   TODO: 鍦ㄨ繖閲屽啓璋冨害瀛愮嚎绋嬬殑鏈哄埗銆傝繖閲岄渶瑕佸疄鐜颁竴涓狥IFO闃熷垪銆傝繖鎰忓懗鐫€浣犻渶瑕佷竴涓澶栫殑闃熷垪鏉ヤ繚瀛樼洰鍓嶆椿璺?         鐨勭嚎绋嬨€備竴涓熀鏈殑鎬濊矾鏄紝浠庨槦鍒椾腑鍙栧嚭绾跨▼锛岀劧鍚庝娇鐢╮esume鎭㈠鍑芥暟涓婁笅鏂囥€傞噸澶嶈繖涓€杩囩▼銆?   */
+++  if (current_thread == NULL) {
+++    // 绗竴娆¤皟搴︼紝浠庝富绾跨▼寮€濮?+    current_thread = main_thread;
+++    current_thread->state = THREAD_RUNNING;
+++  }
+++  //printf("%s\n",current_thread->name);
+++
+++  //涓嶆柇鍙栧嚭闃熷ご锛岀洿鍒伴槦鍒椾负绌?+  while(1)
+++  {
+++    struct uthread *next_thread = dequeue(&readyQueue);
+++
+++
+++    if (next_thread) {
+++          uthread_resume(next_thread);
+++          
+++          if(current_thread->state == THREAD_STOP)
+++          {
+++            //閿€姣佺嚎绋?+            //printf("绾跨▼缁撴潫锛?s\n",current_thread->name);
+++            thread_destory(current_thread);
+++          }
+++          current_thread=main_thread;//灏嗗綋鍓嶇嚎绋嬭缃负涓荤嚎绋?+    } else {
+++      //printf("闃熷垪涓虹┖\n");
+++      break;
+++    }
+++  }
++ }
++ 
++ long long uthread_yield() {
++   /*
++   TODO: 鐢ㄦ埛鎬佺嚎绋嬭鍑烘帶鍒舵潈鍒拌皟搴﹀櫒銆傜敱姝ｅ湪鎵ц鐨勭敤鎴锋€佸嚱鏁版潵璋冪敤銆傝寰楄皟鏁磘cb鐘舵€併€?   */
+++  //printf("绾跨▼涓诲姩璁╁嚭\n");
+++  // 璁剧疆褰撳墠绾跨▼鐨勭姸鎬佷负鎸傝捣
+++  current_thread->state = THREAD_SUSPENDED;
+++  // 灏嗗綋鍓嶇嚎绋嬪姞鍏ュ埌闃熷垪涓?+  enqueue(&readyQueue, current_thread);
+++  // 鎺у埗鏉冭浆浜ゅ洖璋冨害鍣?+  //printf("绾跨▼鍒囨崲鍥炰富绾跨▼\n");
+++  thread_switch(&current_thread->context, &main_thread->context);
++   return 0;
++ }
++ 
++@@ -77,6 +180,15 @@ void uthread_resume(struct uthread *tcb) {
++   /*
++   TODO锛氳皟搴﹀櫒鎭㈠鍒颁竴涓嚱鏁扮殑涓婁笅鏂囥€?   */
+++  //printf("褰撳墠绾跨▼锛?s\n",current_thread->name);
+++  tcb->state = THREAD_RUNNING;
+++
+++  // 鍦ㄦ仮澶嶆椂锛屽皢褰撳墠绾跨▼璁剧疆涓鸿鎭㈠鐨勭嚎绋?+  //printf("涓嬩竴绾跨▼锛?s\n",tcb->name);
+++  current_thread = tcb;
+++
+++  // 鎵ц涓婁笅鏂囧垏鎹紝鎭㈠绾跨▼鐨勪笂涓嬫枃
+++  thread_switch(&main_thread->context, &tcb->context);
++ }
++ 
++ void thread_destory(struct uthread *tcb) {
++@@ -88,9 +200,16 @@ void _uthread_entry(struct uthread *tcb, void (*thread_func)(void *),
++   /*
++   TODO: 杩欐槸鎵€鏈夌敤鎴锋€佺嚎绋嬪嚱鏁板紑濮嬫墽琛岀殑鍏ュ彛銆傚湪杩欎釜鍑芥暟涓紝浣犻渶瑕佷紶鍙傛暟缁欑湡姝ｈ皟鐢ㄧ殑鍑芥暟锛岀劧鍚庤缃畉cb鐨勭姸鎬併€?   */
+++  tcb->state = THREAD_RUNNING;
+++  thread_func(arg);
+++  tcb->state = THREAD_STOP;
+++  
+++  thread_switch(&tcb->context, &main_thread->context);
++ }
++ 
++ void init_uthreads() {
++   main_thread = malloc(sizeof(struct uthread));
++   make_dummpy_context(&main_thread->context);
+++  main_thread->name="main";
+++  initQueue(&readyQueue);//鍒濆鍖栭槦鍒? }
++\ No newline at end of file
++diff --git a/uthread.h b/uthread.h
++index 4097d91..64fc468 100644
++--- a/uthread.h
+++++ b/uthread.h
++@@ -57,4 +57,5 @@ long long uthread_yield();
++ /// @param tcb 绾跨▼鐨勬帶鍒跺潡q
++ void thread_destory(struct uthread *tcb);
++ 
+++
++ #endif
++\ No newline at end of file
++-- 
++2.42.0.windows.2
++
+diff --git a/uthread.c b/uthread.c
+index 93926e9..76fc895 100644
+--- a/uthread.c
++++ b/uthread.c
+@@ -1,96 +1,215 @@
+-#include "uthread.h"
+-#include <stdio.h>
+-#include <stdlib.h>
+-#include <string.h>
+-#include <unistd.h>
+-
+-static struct uthread *current_thread = NULL;
+-static struct uthread *main_thread = NULL;
+-
+-/// @brief 切换上下文
+-/// @param from 当前上下文
+-/// @param to 要切换到的上下文
+-extern void thread_switch(struct context *from, struct context *to);
+-
+-/// @brief 线程的入口函数
+-/// @param tcb 线程的控制块
+-/// @param thread_func 线程的执行函数
+-/// @param arg 线程的参数
+-void _uthread_entry(struct uthread *tcb, void (*thread_func)(void *),
+-                    void *arg);
+-
+-/// @brief 清空上下文结构体
+-/// @param context 上下文结构体指针
+-static inline void make_dummpy_context(struct context *context) {
+-  memset((struct context *)context, 0, sizeof(struct context));
+-}
+-
+-struct uthread *uthread_create(void (*func)(void *), void *arg,const char* thread_name) {
+-  struct uthread *uthread = NULL;
+-  int ret;
+-
+-  // 申请一块16字节对齐的内存
+-  ret = posix_memalign((void **)&uthread, 16, sizeof(struct uthread));
+-  if (0 != ret) {
+-    printf("error");
+-    exit(-1);
+-  }
+-
+-  //         +------------------------+
+-  // low     |                        |
+-  //         |                        |
+-  //         |                        |
+-  //         |         stack          |
+-  //         |                        |
+-  //         |                        |
+-  //         |                        |
+-  //         +------------------------+
+-  //  high   |    fake return addr    |
+-  //         +------------------------+
+-
+-  /*
+-  TODO: 在这里初始化uthread结构体。可能包括设置rip,rsp等寄存器。入口地址需要是函数_uthread_entry.
+-        除此以外，还需要设置uthread上的一些状态，保存参数等等。
+-        
+-        你需要注意rsp寄存器在这里要8字节对齐，否则后面从context switch进入其他函数的时候会有rsp寄存器
+-        不对齐的情况（表现为在printf里面Segment Fault）
+-  */
+-  return uthread;
+-}
+-
+-
+-void schedule() {
+-  /*
+-  TODO: 在这里写调度子线程的机制。这里需要实现一个FIFO队列。这意味着你需要一个额外的队列来保存目前活跃
+-        的线程。一个基本的思路是，从队列中取出线程，然后使用resume恢复函数上下文。重复这一过程。
+-  */
+-}
+-
+-long long uthread_yield() {
+-  /*
+-  TODO: 用户态线程让出控制权到调度器。由正在执行的用户态函数来调用。记得调整tcb状态。
+-  */
+-  return 0;
+-}
+-
+-void uthread_resume(struct uthread *tcb) {
+-  /*
+-  TODO：调度器恢复到一个函数的上下文。
+-  */
+-}
+-
+-void thread_destory(struct uthread *tcb) {
+-  free(tcb);
+-}
+-
+-void _uthread_entry(struct uthread *tcb, void (*thread_func)(void *),
+-                    void *arg) {
+-  /*
+-  TODO: 这是所有用户态线程函数开始执行的入口。在这个函数中，你需要传参数给真正调用的函数，然后设置tcb的状态。
+-  */
+-}
+-
+-void init_uthreads() {
+-  main_thread = malloc(sizeof(struct uthread));
+-  make_dummpy_context(&main_thread->context);
++#include "uthread.h"
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <unistd.h> 
++
++// 队列节点
++struct QueueNode {
++    struct uthread *thread;
++    struct QueueNode *next;
++};
++
++// 队列结构
++struct Queue {
++    struct QueueNode *front;
++    struct QueueNode *rear;
++};
++
++// 初始化队列
++void initQueue(struct Queue *q) {
++    q->front = q->rear = NULL;
++}
++
++// 入队列
++void enqueue(struct Queue *q, struct uthread *thread) {
++    struct QueueNode *newNode = (struct QueueNode *)malloc(sizeof(struct QueueNode));
++    if (newNode == NULL) {
++        perror("Failed to allocate memory for queue node");
++        exit(EXIT_FAILURE);
++    }
++    newNode->thread = thread;
++    newNode->next = NULL;
++    if (q->rear == NULL) {
++        q->front = q->rear = newNode;
++        return;
++    }
++    q->rear->next = newNode;
++    q->rear = newNode;
++}
++
++// 出队列
++struct uthread *dequeue(struct Queue *q) {
++    if (q->front == NULL) {
++        return NULL;
++    }
++    struct QueueNode *temp = q->front;
++    q->front = q->front->next;
++    if (q->front == NULL) {
++        q->rear = NULL;
++    }
++    struct uthread *thread = temp->thread;
++    free(temp);
++    return thread;
++}
++
++static struct Queue readyQueue;
++
++static struct uthread *current_thread = NULL;
++static struct uthread *main_thread = NULL;
++
++/// @brief 切换上下文
++/// @param from 当前上下文
++/// @param to 要切换到的上下文
++extern void thread_switch(struct context *from, struct context *to);
++
++/// @brief 线程的入口函数
++/// @param tcb 线程的控制块
++/// @param thread_func 线程的执行函数
++/// @param arg 线程的参数
++void _uthread_entry(struct uthread *tcb, void (*thread_func)(void *),
++                    void *arg);
++
++/// @brief 清空上下文结构体
++/// @param context 上下文结构体指针
++static inline void make_dummpy_context(struct context *context) {
++  memset((struct context *)context, 0, sizeof(struct context));
++}
++
++struct uthread *uthread_create(void (*func)(void *), void *arg,const char* thread_name) {
++  struct uthread *uthread = NULL;
++  int ret;
++
++  // 申请一块16字节对齐的内存
++  ret = posix_memalign((void **)&uthread, 16, sizeof(struct uthread));
++  if (0 != ret) {
++    printf("error");
++    exit(-1);
++  }
++
++  //         +------------------------+
++  // low     |                        |
++  //         |                        |
++  //         |                        |
++  //         |         stack          |
++  //         |                        |
++  //         |                        |
++  //         |                        |
++  //         +------------------------+
++  //  high   |    fake return addr    |
++  //         +------------------------+
++
++  /*
++  TODO: 在这里初始化uthread结构体。可能包括设置rip,rsp等寄存器。入口地址需要是函数_uthread_entry.
++        除此以外，还需要设置uthread上的一些状态，保存参数等等。
++        
++        你需要注意rsp寄存器在这里要8字节对齐，否则后面从context switch进入其他函数的时候会有rsp寄存器
++        不对齐的情况（表现为在printf里面Segment Fault）
++  */
++  uthread->state = THREAD_INIT;
++  uthread->name = thread_name;
++
++  make_dummpy_context(&uthread->context);
++
++  uthread->context.rsp = ((long long)&uthread->stack + STACK_SIZE) & (~(long long)15);
++  uthread->context.rsp -=8;
++  uthread->context.rip = (long long)_uthread_entry;
++
++  uthread->context.rdi = (long long)uthread;
++  uthread->context.rsi = (long long)func;
++  uthread->context.rdx = (long long)arg;
++
++  //把新创建的线程加入到队列中
++  enqueue(&readyQueue, uthread);
++
++  return uthread;
++}
++
++
++void schedule() {
++  /*
++  TODO: 在这里写调度子线程的机制。这里需要实现一个FIFO队列。这意味着你需要一个额外的队列来保存目前活跃
++        的线程。一个基本的思路是，从队列中取出线程，然后使用resume恢复函数上下文。重复这一过程。
++  */
++  if (current_thread == NULL) {
++    // 第一次调度，从主线程开始
++    current_thread = main_thread;
++    current_thread->state = THREAD_RUNNING;
++  }
++  //printf("%s\n",current_thread->name);
++
++  //不断取出队头，直到队列为空
++  while(1)
++  {
++    struct uthread *next_thread = dequeue(&readyQueue);
++
++
++    if (next_thread) {
++          uthread_resume(next_thread);
++          
++          if(current_thread->state == THREAD_STOP)
++          {
++            //销毁线程
++            //printf("线程结束：%s\n",current_thread->name);
++            thread_destory(current_thread);
++          }
++          current_thread=main_thread;//将当前线程设置为主线程
++    } else {
++      //printf("队列为空\n");
++      break;
++    }
++  }
++}
++
++long long uthread_yield() {
++  /*
++  TODO: 用户态线程让出控制权到调度器。由正在执行的用户态函数来调用。记得调整tcb状态。
++  */
++  //printf("线程主动让出\n");
++  // 设置当前线程的状态为挂起
++  current_thread->state = THREAD_SUSPENDED;
++  // 将当前线程加入到队列中
++  enqueue(&readyQueue, current_thread);
++  // 控制权转交回调度器
++  //printf("线程切换回主线程\n");
++  thread_switch(&current_thread->context, &main_thread->context);
++  return 0;
++}
++
++void uthread_resume(struct uthread *tcb) {
++  /*
++  TODO：调度器恢复到一个函数的上下文。
++  */
++  //printf("当前线程：%s\n",current_thread->name);
++  tcb->state = THREAD_RUNNING;
++
++  // 在恢复时，将当前线程设置为被恢复的线程
++  //printf("下一线程：%s\n",tcb->name);
++  current_thread = tcb;
++
++  // 执行上下文切换，恢复线程的上下文
++  thread_switch(&main_thread->context, &tcb->context);
++}
++
++void thread_destory(struct uthread *tcb) {
++  free(tcb);
++}
++
++void _uthread_entry(struct uthread *tcb, void (*thread_func)(void *),
++                    void *arg) {
++  /*
++  TODO: 这是所有用户态线程函数开始执行的入口。在这个函数中，你需要传参数给真正调用的函数，然后设置tcb的状态。
++  */
++  tcb->state = THREAD_RUNNING;
++  thread_func(arg);
++  tcb->state = THREAD_STOP;
++  
++  thread_switch(&tcb->context, &main_thread->context);
++}
++
++void init_uthreads() {
++  main_thread = malloc(sizeof(struct uthread));
++  make_dummpy_context(&main_thread->context);
++  main_thread->name="main";
++  initQueue(&readyQueue);//初始化队列
+ }
+\ No newline at end of file
+diff --git a/uthread.h b/uthread.h
+index 4097d91..03acd8c 100644
+--- a/uthread.h
++++ b/uthread.h
+@@ -1,60 +1,61 @@
+-#ifndef UTHREAD_H
+-#define UTHREAD_H
+-
+-#include <stddef.h>
+-#define STACK_SIZE 4096
+-
+-/// @brief 线程的状态
+-/// @param THREAD_INIT 初始化
+-/// @param THREAD_RUNNING 运行
+-/// @param THREAD_STOP 停止
+-/// @param THREAD_SUSPENDED 挂起
+-enum thread_state {
+-  THREAD_INIT,
+-  THREAD_RUNNING,
+-  THREAD_STOP,
+-  THREAD_SUSPENDED,
+-};
+-
+-/// @brief 线程的上下文
+-struct context {
+-  long long rip, rsp, rbp, rbx, r12, r13, r14, r15;
+-  long long rdi, rsi, rdx;
+-};
+-
+-/// @brief 线程的控制块
+-/// @param stack 栈
+-/// @param context 上下文
+-/// @param state 状态
+-/// @param name 名字
+-struct uthread {
+-  char stack[STACK_SIZE];
+-  struct context context;
+-  enum thread_state state;
+-  const char *name;
+-};
+-
+-/// @brief 初始化系统，在main函数开始时调用
+-void init_uthreads();
+-
+-/// @brief 主线程陷入调度器，阻塞
+-void schedule();
+-
+-/// @brief 创建一个线程
+-/// @param func 线程的执行函数
+-/// @param arg 线程的参数
+-/// @param thread_name 线程的名字
+-struct uthread *uthread_create(void (*func)(void *), void *arg,const char* thread_name);
+-
+-/// @brief 恢复线程
+-/// @param 线程的控制块
+-void uthread_resume(struct uthread *tcb);
+-
+-/// @brief 线程主动让出
+-long long uthread_yield();
+-
+-/// @brief 销毁线程的结构体
+-/// @param tcb 线程的控制块q
+-void thread_destory(struct uthread *tcb);
+-
++#ifndef UTHREAD_H
++#define UTHREAD_H
++
++#include <stddef.h>
++#define STACK_SIZE 4096
++
++/// @brief 线程的状态
++/// @param THREAD_INIT 初始化
++/// @param THREAD_RUNNING 运行
++/// @param THREAD_STOP 停止
++/// @param THREAD_SUSPENDED 挂起
++enum thread_state {
++  THREAD_INIT,
++  THREAD_RUNNING,
++  THREAD_STOP,
++  THREAD_SUSPENDED,
++};
++
++/// @brief 线程的上下文
++struct context {
++  long long rip, rsp, rbp, rbx, r12, r13, r14, r15;
++  long long rdi, rsi, rdx;
++};
++
++/// @brief 线程的控制块
++/// @param stack 栈
++/// @param context 上下文
++/// @param state 状态
++/// @param name 名字
++struct uthread {
++  char stack[STACK_SIZE];
++  struct context context;
++  enum thread_state state;
++  const char *name;
++};
++
++/// @brief 初始化系统，在main函数开始时调用
++void init_uthreads();
++
++/// @brief 主线程陷入调度器，阻塞
++void schedule();
++
++/// @brief 创建一个线程
++/// @param func 线程的执行函数
++/// @param arg 线程的参数
++/// @param thread_name 线程的名字
++struct uthread *uthread_create(void (*func)(void *), void *arg,const char* thread_name);
++
++/// @brief 恢复线程
++/// @param 线程的控制块
++void uthread_resume(struct uthread *tcb);
++
++/// @brief 线程主动让出
++long long uthread_yield();
++
++/// @brief 销毁线程的结构体
++/// @param tcb 线程的控制块q
++void thread_destory(struct uthread *tcb);
++
++
+ #endif
+\ No newline at end of file
+-- 
+2.34.1
+
